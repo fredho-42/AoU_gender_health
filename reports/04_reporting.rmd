@@ -32,6 +32,7 @@ library(gtsummary)
 library(kableExtra)
 library(ggplot2)
 library(consort)
+library(patchwork) # Added for combining figure panels
 
 
 # 1. Load Data
@@ -56,12 +57,12 @@ df_reg_contrasts <- read_csv('../results/table_reg_contrasts.csv') %>%
 df_reg_sens <- read_csv('../results/table_reg_contrasts_sens.csv') %>%
   mutate(model = "Demographics & SES (regression)")
 
-# 2. Define Outcome Groups (Maintaining logical order)
+# 2. Define Outcome Groups (For Tables)
 outcomes_numeric <- c("gph_t", "gmh_t", "general_health", "social_roles", 
                       "drinks_per_week",
                       "bmi", "waist_cm", "whtr", "whr", "sbp", "dbp")
 
-outcomes_program_bin <- c('smoking_b', 'vaping_b', "bmi_b", "whtr_b", "whr_b", "hyt_b")
+outcomes_survey_bin <- c('smoking_b', 'vaping_b', "bmi_b", "whtr_b", "whr_b", "hyt_b")
 
 outcomes_ehr_bin <- c("hypertension", "chd", "atrial_fibrillation", "heart_failure", 
                       "stroke_tia", "diabetes", "ckd", "asthma", "copd", 
@@ -69,14 +70,22 @@ outcomes_ehr_bin <- c("hypertension", "chd", "atrial_fibrillation", "heart_failu
                       "cancer", "chronic_pain", "ibs", "constipation", "hearing_loss", 
                       "alcohol_disorder", "connective_tissue", "mm")
 
-outcomes_hyt <- c("hyt_uncontrolled", "hyt_undetected")
+outcomes_hyt <- c("hyt_undiagnosed", "hyt_uncontrolled")
+
+# --- Define Plotting Groups (For Thematic Figures) ---
+plot_self_num <- c("gph_t", "gmh_t", "general_health", "social_roles", "drinks_per_week")
+plot_self_bin <- c("smoking_b", "vaping_b")
+
+plot_phys_num <- c("bmi", "waist_cm", "whtr", "whr", "sbp", "dbp")
+plot_phys_bin <- c("bmi_b", "whtr_b", "whr_b", "hyt_b")
+
 
 # 3. Custom Variable Dictionary for Clean Labels
-raw_names <- c(outcomes_numeric, outcomes_program_bin, outcomes_ehr_bin, outcomes_hyt)
+raw_names <- c(outcomes_numeric, outcomes_survey_bin, outcomes_ehr_bin, outcomes_hyt)
 clean_names_dict <- str_to_title(str_replace_all(raw_names, "_", " "))
 names(clean_names_dict) <- raw_names
 
-# Override specific program binary names as requested
+# Override specific survey binary names as requested
 clean_names_dict["gph_t"] <- "Global physical health (T-score)"
 clean_names_dict["gmh_t"] <- "Global mental health (T-score)"
 
@@ -85,7 +94,7 @@ clean_names_dict["vaping_b"] <- "Current/previous vaping"
 clean_names_dict["bmi_b"] <- "General obesity (BMI)"
 clean_names_dict["whtr_b"] <- "Central obesity (WHtR)"
 clean_names_dict["whr_b"] <- "Central obesity (WHR)"
-clean_names_dict["hyt_b"] <- "Hypertension"
+clean_names_dict["hyt_b"] <- "Hypertension (Program measured)"
 
 clean_names_dict["waist_cm"] <- "Waist circumference (cm)"
 clean_names_dict["whtr"] <- "Waist-height ratio"
@@ -107,8 +116,8 @@ clean_names_dict["ibs"] <- "Inflammatory bowel syndrome"
 
 clean_names_dict["mm"] <- "Multimorbidity"
 
+clean_names_dict["hyt_undiagnosed"] <- "Undiagnosed hypertension"
 clean_names_dict["hyt_uncontrolled"] <- "Uncontrolled hypertension"
-clean_names_dict["hyt_undetected"] <- "Undiagnosed hypertension"
 
 
 # Wrap in unique() to prevent the "duplicated level" crash between hyt_b and hypertension
@@ -156,7 +165,6 @@ plot_forest <- function(data, title, x_label) {
     theme(
       strip.background = element_rect(fill = "#ecf0f1"),
       strip.text = element_text(face = "bold", size = 10),
-      legend.position = "bottom",
       panel.grid.minor = element_blank(),
       axis.text.y = element_text(size = 9)
     )
@@ -203,9 +211,6 @@ n_excl_demo <- 623166 - 588126
 n_final <- 588126
 
 # 2. Build the Plot
-# The add_box() function chains the boxes together vertically.
-# The add_side_box() function automatically places the exclusion to the right.
-
 txt_start <- paste0("Total Registered Participants\n(n = ", format(n_total, big.mark=","), ")")
 txt_excl1 <- paste0("Excluded (n = ", format(n_excl_gender, big.mark=","), "):\nMissing gender identity data")
 txt_stage1 <- paste0("Participants with\nGender Identity Data\n(n = ", format(n_stage_1, big.mark=","), ")")
@@ -215,7 +220,7 @@ txt_excl3 <- paste0("Excluded (n = ", format(n_excl_demo, big.mark=","), "):\nMi
 txt_final <- paste0("Final Analytic Cohort\n(n = ", format(n_final, big.mark=","), ")")
 
 plot_consort <- add_box(txt = txt_start) %>%
-  add_side_box(txt = txt_excl1) %>% # Automatically branches right
+  add_side_box(txt = txt_excl1) %>% 
   add_box(txt = txt_stage1) %>%
   add_side_box(txt = txt_excl2) %>%
   add_box(txt = txt_stage2) %>%
@@ -249,7 +254,6 @@ dat %>%
     )
   ) %>%
   add_overall() %>%
-  # ONLY apply suppression to categorical/dichotomous variables
   modify_table_body(~ .x %>% 
     mutate(across(starts_with("stat_"), 
       ~ ifelse(var_type %in% c("categorical", "dichotomous"), suppress_small_cells(.x), .x)
@@ -265,9 +269,6 @@ dat %>%
 
 ### Numeric outcomes
 
-* T-scores: population mean (SD) = 50 (10); the higher the better
-* General health / social roles: 5-point Likert-style response; the higher the better
-
 ```{r table1b-numeric}
 dat %>%
   select(gender_c, all_of(outcomes_numeric)) %>%
@@ -275,7 +276,7 @@ dat %>%
   tbl_summary(
     by = gender_c,
     missing = "no",
-    type = list(everything() ~ "continuous"), # Forces Likert variables to be treated as continuous
+    type = list(everything() ~ "continuous"), 
     statistic = list(all_continuous() ~ "{mean} ({sd})")
   ) %>%
   add_overall() %>%
@@ -292,9 +293,9 @@ dat %>%
 
 ### Study binary outcomes
 
-```{r table1c-program}
+```{r table1c-survey}
 dat %>%
-  select(gender_c, all_of(outcomes_program_bin)) %>%
+  select(gender_c, all_of(outcomes_survey_bin)) %>%
   rename_with(~ clean_names_dict[.x], .cols = -gender_c) %>%
   tbl_summary(
     by = gender_c,
@@ -307,7 +308,7 @@ dat %>%
     ))
   ) %>%
   bold_labels() %>%
-  as_kable_extra(booktabs = TRUE, caption = "Table 1C: Unadjusted Program Binary Outcomes by Gender Identity") %>%
+  as_kable_extra(booktabs = TRUE, caption = "Table 1C: Unadjusted Survey Binary Outcomes by Gender Identity") %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE) %>%
   scroll_box(height = "75vh", fixed_thead = TRUE)
 ```
@@ -339,9 +340,6 @@ dat %>%
 
 ### Numeric Health Outcomes
 
-* T-scores: population mean (SD) = 50 (10); the higher the better
-* General health / social roles: 5-point Likert-style response; the higher the better
-
 ```{r means-numeric}
 make_means_table(df_gform_means, outcomes_numeric, 
                  "Table 2: Marginal means [95% CI] for mumeric outcomes collected in program")
@@ -351,8 +349,8 @@ make_means_table(df_gform_means, outcomes_numeric,
 
 ### Study Binary Outcomes
 
-```{r means-program}
-make_means_table(df_gform_means, outcomes_program_bin, 
+```{r means-survey}
+make_means_table(df_gform_means, outcomes_survey_bin, 
                  "Table 3: Marginal prevalence [95% CI] for binary outcomes collected in program")
 ```
 
@@ -369,9 +367,6 @@ make_means_table(df_gform_means, outcomes_ehr_bin,
 
 ### Hypertension Care Cascade
 
-* Uncontrolled hypertension defined as measured hypertensive in the program and having an existing hypertension diagnosis in EHR. Compared with people measured normotensive and having an existing hypertension diagnosis in EHR.
-* Undiagnosed hypertension defined as measured hypertensive in the program and having no hypertension diagnosis in EHR. Compared with people measured normotensive in program and having no hypertension diagnosis in EHR.
-
 ```{r means-hyt}
 make_means_table(df_gform_means, outcomes_hyt, 
                  "Table 5: Marginal prevalence [95% CI] for hypertension care cascade")
@@ -383,172 +378,187 @@ make_means_table(df_gform_means, outcomes_hyt,
 ## 5. Main findings: comparisons based on g-formula
 
 Primary analysis adjusted for age (P-spline), race/ethnicity, geographic region (census division). 
-
 Sensitivity analysis additionally adjusted for education, area deprivation quintile, and employment status. 
 
-### Mean difference
+### Figure 1: Self-Reported Health and Behavioral Risks
 
-* T-scores: population mean (SD) = 50 (10); the higher the better
-* General health / social roles: 5-point Likert-style response; the higher the better
-
-```{r fig1-numeric, fig.height=10, fig.width=12}
-df_plot_data %>%
-  filter(outcome %in% outcomes_numeric, metric == "difference") %>%
+```{r fig1-self, fig.height=10, fig.width=12}
+p1a <- df_plot_data %>%
+  filter(outcome %in% plot_self_num, metric == "difference") %>%
   plot_forest(
-    title = "Figure 1: Mean differences in numeric outcomes collected in program",
+    title = "A: Mean differences for self-reported outcomes",
     x_label = "Mean Difference [95% CI]"
   )
-```
 
-> * **Demographics only model** adjusted for age (P-spline), race/ethnicity, and census division; 
-> * **Demographics & SES model** additionally adjusted for education, deprivation quintile, and employment status.
-
-
-### Prevalence difference
-
-```{r fig2-program-diff, fig.height=6, fig.width=12}
-df_plot_data %>%
-  filter(outcome %in% outcomes_program_bin, metric == "difference") %>%
+p1b <- df_plot_data %>%
+  filter(outcome %in% plot_self_bin, metric == "ratio") %>%
   plot_forest(
-    title = "Figure 2: Prevalence differences in binary outcomes collected in program",
-    x_label = "Prevalence Difference [95% CI]"
+    title = "B: Prevalence ratios for self-reported outcomes",
+    x_label = "Prevalence Ratio [95% CI]"
   )
+
+# Combine using patchwork, align margins, and collect legend
+(p1a / p1b) + 
+  plot_layout(heights = c(1.5, 1), guides = "collect") & 
+  theme(legend.position = "bottom")
 ```
 
 > * **Demographics only model** adjusted for age (P-spline), race/ethnicity, and census division; 
 > * **Demographics & SES model** additionally adjusted for education, deprivation quintile, and employment status.
 
 
-```{r fig3-ehr-diff, fig.height=12, fig.width=12}
+### Figure 2: Program Measured Physical Measurements
+
+```{r fig2-phys, fig.height=11, fig.width=12}
+p2a <- df_plot_data %>%
+  filter(outcome %in% plot_phys_num, metric == "difference") %>%
+  plot_forest(
+    title = "A: Mean differences for program measured outcomes",
+    x_label = "Mean Difference [95% CI]"
+  )
+
+p2b <- df_plot_data %>%
+  filter(outcome %in% plot_phys_bin, metric == "ratio") %>%
+  plot_forest(
+    title = "B: Prevalence ratios for program measured outcomes",
+    x_label = "Prevalence Ratio [95% CI]"
+  )
+
+# Combine using patchwork, align margins, and collect legend
+(p2a / p2b) + 
+  plot_layout(heights = c(1.5, 1), guides = "collect") & 
+  theme(legend.position = "bottom")
+```
+
+> * **Demographics only model** adjusted for age (P-spline), race/ethnicity, and census division; 
+> * **Demographics & SES model** additionally adjusted for education, deprivation quintile, and employment status.
+
+
+### Figure 3: EHR Diagnoses
+
+```{r fig3-ehr-ratio, fig.height=12, fig.width=12}
+df_plot_data %>%
+  filter(outcome %in% outcomes_ehr_bin, metric == "ratio") %>%
+  plot_forest(
+    title = "Prevalence ratios for EHR-derived diagnoses",
+    x_label = "Prevalence Ratio [95% CI]"
+  ) + theme(legend.position = "bottom")
+```
+
+> * **Demographics only model** adjusted for age (P-spline), race/ethnicity, and census division; 
+> * **Demographics & SES model** additionally adjusted for education, deprivation quintile, and employment status.
+
+
+### Figure 4: Hypertension Care Cascade
+
+```{r fig4-hyt-ratio, fig.height=4, fig.width=12}
+df_plot_data %>%
+  filter(outcome %in% outcomes_hyt, metric == "ratio") %>%
+  plot_forest(
+    title = "Prevalence ratios for hypertension care cascade",
+    x_label = "Prevalence Ratio [95% CI]"
+  ) + theme(legend.position = "bottom")
+```
+
+> * **Uncontrolled hypertension** defined as measured hypertensive in the program among people with an existing hypertension diagnosis in EHR.
+> * **Undiagnosed hypertension** defined as measured hypertensive in the program among people without an existing hypertension diagnosis in EHR.
+> * **Demographics only model** adjusted for age (P-spline), race/ethnicity, and census division.
+> * **Demographics & SES model** additionally adjusted for education, deprivation quintile, and employment status.
+
+
+## 6. Supplementary findings: Prevalence differences and Regression estimates
+
+### Supplementary Figures: Prevalence Differences (G-formula)
+
+```{r supp-fig2-survey-diff, fig.height=6, fig.width=12}
+df_plot_data %>%
+  filter(outcome %in% c(plot_self_bin, plot_phys_bin), metric == "difference") %>%
+  plot_forest(
+    title = "Supplementary Figure 2: Prevalence differences for program measured outcomes",
+    x_label = "Prevalence Difference [95% CI]"
+  ) + theme(legend.position = "bottom")
+```
+
+```{r supp-fig3-ehr-diff, fig.height=12, fig.width=12}
 df_plot_data %>%
   filter(outcome %in% outcomes_ehr_bin, metric == "difference") %>%
   plot_forest(
-    title = "Figure 3: Prevalence differences in EHR-derived diagnoses",
+    title = "Supplementary Figure 3: Prevalence differences for EHR-derived diagnoses",
     x_label = "Prevalence Difference [95% CI]"
-  )
+  ) + theme(legend.position = "bottom")
 ```
 
-> * **Demographics only model** adjusted for age (P-spline), race/ethnicity, and census division; 
-> * **Demographics & SES model** additionally adjusted for education, deprivation quintile, and employment status.
-
-
-```{r fig4-hyt-diff, fig.height=4, fig.width=12}
+```{r supp-fig4-hyt-diff, fig.height=4, fig.width=12}
 df_plot_data %>%
   filter(outcome %in% outcomes_hyt, metric == "difference") %>%
   plot_forest(
-    title = "Figure 4: Prevalence differences in hypertension care cascade",
+    title = "Supplementary Figure 4: Prevalence differences for hypertension care cascade",
     x_label = "Prevalence Difference [95% CI]"
-  )
+  ) + theme(legend.position = "bottom")
 ```
 
-> * **Uncontrolled hypertension** defined as measured hypertensive in the program among people with an existing hypertension diagnosis in EHR.
-> * **Undiagnosed hypertension** defined as measured hypertensive in the program among people without an existing hypertension diagnosis in EHR.
-> * **Demographics only model** adjusted for age (P-spline), race/ethnicity, and census division; 
-> * **Demographics & SES model** additionally adjusted for education, deprivation quintile, and employment status.
 
-
-### Prevalence ratio
-
-```{r fig5-program-ratio, fig.height=6, fig.width=12}
-df_plot_data %>%
-  filter(outcome %in% outcomes_program_bin, metric == "ratio") %>%
-  plot_forest(
-    title = "Figure 5: Prevalence ratios in binary outcomes collected in program",
-    x_label = "Prevalence Ratio [95% CI]"
-  )
-```
-
-> * **Demographics only model** adjusted for age (P-spline), race/ethnicity, and census division; 
-> * **Demographics & SES model** additionally adjusted for education, deprivation quintile, and employment status.
-
-
-```{r fig6-ehr-ratio, fig.height=12, fig.width=12}
-df_plot_data %>%
-  filter(outcome %in% outcomes_ehr_bin, metric == "ratio") %>%
-  plot_forest(
-    title = "Figure 6: Prevalence ratios in EHR-derived diagnoses",
-    x_label = "Prevalence Ratio [95% CI]"
-  )
-```
-
-> * **Demographics only model** adjusted for age (P-spline), race/ethnicity, and census division; 
-> * **Demographics & SES model** additionally adjusted for education, deprivation quintile, and employment status.
-
-
-```{r fig7-hyt-ratio, fig.height=4, fig.width=12}
-df_plot_data %>%
-  filter(outcome %in% outcomes_hyt, metric == "ratio") %>%
-  plot_forest(
-    title = "Figure 7: Prevalence ratios in hypertension care cascade",
-    x_label = "Prevalence Ratio [95% CI]"
-  )
-```
-
-> * **Uncontrolled hypertension** defined as measured hypertensive in the program among people with an existing hypertension diagnosis in EHR.
-> * **Undiagnosed hypertension** defined as measured hypertensive in the program among people without an existing hypertension diagnosis in EHR.
-> * **Demographics only model** adjusted for age (P-spline), race/ethnicity, and census division; 
-> * **Demographics & SES model** additionally adjusted for education, deprivation quintile, and employment status.
-
-
-## 6. Sensitivity findings: comparisons based on regression only
+### Supplementary Figures: Regression Estimates
 
 Note: Regression estimates compute coefficients for numeric variables in linear regression and prevalence ratios (exponent of coefficient) for binary variables in modified Poisson regression.
 
-### Mean difference
-
-* T-scores: population mean (SD) = 50 (10); the higher the better
-* General health / social roles: 5-point Likert-style response; the higher the better
-
-```{r fig8-reg-numeric, fig.height=10, fig.width=12}
-df_reg_plot %>%
-  filter(outcome %in% outcomes_numeric, metric == "difference") %>%
+```{r supp-fig5-reg-self, fig.height=10, fig.width=12}
+p5a <- df_reg_plot %>%
+  filter(outcome %in% plot_self_num, metric == "difference") %>%
   plot_forest(
-    title = "Figure 8: Mean differences for numeric outcomes collected in program (Regression)",
+    title = "Supplementary Figure 5A: Mean differences in self-reported outcomes based on regression cofficients",
     x_label = "Mean Difference [95% CI]"
   )
-```
 
-> * **Demographics only model** adjusted for age (P-spline), race/ethnicity, and census division; 
-> * **Demographics & SES model** additionally adjusted for education, deprivation quintile, and employment status.
-
-
-### Prevalence ratio
-
-```{r fig9-reg-program, fig.height=6, fig.width=12}
-df_reg_plot %>%
-  filter(outcome %in% outcomes_program_bin, metric == "ratio") %>%
+p5b <- df_reg_plot %>%
+  filter(outcome %in% plot_self_bin, metric == "ratio") %>%
   plot_forest(
-    title = "Figure 9: Prevalence ratios for binary outcomes collected in programme (Regression)",
+    title = "Supplementary Figure 5B: Prevalence ratios for self-reported outcomes based on regression cofficients",
     x_label = "Prevalence Ratio [95% CI]"
   )
+
+# Combine using patchwork
+(p5a / p5b) + 
+  plot_layout(heights = c(1.5, 1), guides = "collect") & 
+  theme(legend.position = "bottom")
 ```
 
-> * **Demographics only model** adjusted for age (P-spline), race/ethnicity, and census division; 
-> * **Demographics & SES model** additionally adjusted for education, deprivation quintile, and employment status.
 
+```{r supp-fig6-reg-phys, fig.height=11, fig.width=12}
+p6a <- df_reg_plot %>%
+  filter(outcome %in% plot_phys_num, metric == "difference") %>%
+  plot_forest(
+    title = "Supplementary Figure 6A: Mean differences for program measured outcomes based on regression cofficients",
+    x_label = "Mean Difference [95% CI]"
+  )
 
-```{r fig10-reg-ehr, fig.height=12, fig.width=12}
+p6b <- df_reg_plot %>%
+  filter(outcome %in% plot_phys_bin, metric == "ratio") %>%
+  plot_forest(
+    title = "Supplementary Figure 6B: Prevalence ratios for program measured outcomes based on regression cofficients",
+    x_label = "Prevalence Ratio [95% CI]"
+  )
+
+# Combine using patchwork
+(p6a / p6b) + 
+  plot_layout(heights = c(1.5, 1), guides = "collect") & 
+  theme(legend.position = "bottom")
+```
+
+```{r supp-fig7-reg-ehr, fig.height=12, fig.width=12}
 df_reg_plot %>%
   filter(outcome %in% outcomes_ehr_bin, metric == "ratio") %>%
   plot_forest(
-    title = "Figure 10: Prevalence ratios for EHR-derived diagnoses (Regression)",
+    title = "Supplementary Figure 7: Prevalence ratios for EHR-derived diagnoses based on regression cofficients",
     x_label = "Prevalence Ratio [95% CI]"
-  )
+  ) + theme(legend.position = "bottom")
 ```
 
-> * **Demographics only model** adjusted for age (P-spline), race/ethnicity, and census division; 
-> * **Demographics & SES model** additionally adjusted for education, deprivation quintile, and employment status.
-
-```{r fig11-reg-hyt, fig.height=4, fig.width=12}
+```{r supp-fig8-reg-hyt, fig.height=4, fig.width=12}
 df_reg_plot %>%
   filter(outcome %in% outcomes_hyt, metric == "ratio") %>%
   plot_forest(
-    title = "Figure 11: Prevalence ratios for hypertension care cascade (Regression)",
+    title = "Supplementary Figure 8: Prevalence ratios for hypertension care cascade based on regression cofficients",
     x_label = "Prevalence Ratio [95% CI]"
-  )
+  ) + theme(legend.position = "bottom")
 ```
-
-> * **Uncontrolled hypertension** defined as measured hypertensive in the program among people with an existing hypertension diagnosis in EHR.
-> * **Undiagnosed hypertension** defined as measured hypertensive in the program among people without an existing hypertension diagnosis in EHR.
-> * **Demographics only model** adjusted for age (P-spline), race/ethnicity, and census division; 
-> * **Demographics & SES model** additionally adjusted for education, deprivation quintile, and employment status.
